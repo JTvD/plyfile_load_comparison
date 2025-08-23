@@ -10,7 +10,7 @@ from pointcloud_utils import load_df_pointcloud
 
 
 def load_file_through_disk_open3d(filename):
-    """ Loading with open3d, requires saving the decompressed ply file on disk
+    """ Loading with open3d, requires saving the decompressed ply file on disk.
 
     """
     with gzip.open(filename, 'rb') as f_in:
@@ -26,7 +26,7 @@ def load_file_through_disk_open3d(filename):
 
 
 def load_file_through_disk_plyfile(filename):
-    """ Loading with open3d, requires saving the decompressed ply file on disk
+    """ Loading with plyfile from disk.
 
     """
     with gzip.open(filename, 'rb') as f_in:
@@ -41,7 +41,7 @@ def load_file_through_disk_plyfile(filename):
 
 
 def load_file_through_memory_plyfile(filename):
-    """ Loading with open3d, requires saving the decompressed ply file on disk
+    """ Loading with plyfile from memory.
 
     """
     with open(filename, "rb") as f:
