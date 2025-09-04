@@ -21,7 +21,49 @@ def unzip_ply(filename: Path) -> Path:
     return out_path
 
 
-def save_df_pointcloud(filename: str, df: pd.DataFrame,
+def zip_ply(filename: Path) -> Path:
+    """ Zip a ply file to a gzipped ply file.
+        Args:
+            filename (Path): The path to the uncompressed ply file.
+        Returns:
+            Path: The path to the gzipped ply file.
+    """
+    out_path = filename.with_suffix(filename.suffix + '.gz')
+    with open(filename, 'rb') as f_in:
+        with gzip.open(out_path, 'wb') as f_out:
+            copyfileobj(f_in, f_out)
+    return out_path
+
+
+def datetype_mapper(df: pd.DataFrame) -> dict:
+    """Map DataFrame dtypes to PLY file dtypes.
+        Args:
+            df (pd.DataFrame): The input DataFrame.
+        Returns:
+            dict: A dictionary mapping column names to PLY dtypes.
+    """
+    dtype_dict = {"x": "f4", "y": "f4", "z": "f4", "red": "u1", "green": "u1", "blue": "u1"}
+    dtype_map = {
+        "float32": "f4",
+        "float64": "f8",
+        "int32": "i4",
+        "int64": "i4",
+        "uint8": "u1",
+        "uint16": "u2",
+        "int16": "i2",
+        "bool": "u1"
+    }
+    for colname, dtype in df.dtypes.items():
+        if colname not in dtype_dict:
+            dtype_str = str(dtype)
+            if dtype_str in dtype_map:
+                dtype_dict[colname] = dtype_map[dtype_str]
+            else:
+                raise ValueError(f"Unsupported dtype: {dtype_str} for column {colname}")
+    return dtype_dict
+
+
+def save_df_pointcloud(filename: Path, df: pd.DataFrame,
                        pcd_object: o3d.geometry.PointCloud = None):
     """ Open3D cannot save/load pointclouds with 3D scalars fields, therefore we use plyfile.
         Args:
@@ -29,31 +71,33 @@ def save_df_pointcloud(filename: str, df: pd.DataFrame,
             df (pd.DataFrame): The dataframe containing scalarfield values for each point.
             pcd_object (o3d.geometry.PointCloud): The Open3D point cloud object to save.
     """
-    if pcd_object is not None:
-        # pcd object contains the points with colors, the dataframe the other scalar fields
-        xyz = np.asarray(pcd_object.points)
-        rgb = np.round(np.abs(np.asarray(pcd_object.colors)) * 255 * 255)
-        rgb = rgb.astype(int)
-        df_tuple = df.apply(tuple, axis=1).tolist()
-        vertices = list(tuple(sub) + tuple(rgb[idx]) + df_tuple[idx] for idx, sub in enumerate(xyz.tolist()))
-
-        # Create dictionary with datatypes
-        dtype_list = [("x", "f4"), ("y", "f4"), ("z", "f4"), ("red", "u1"), ("green", "u1"), ("blue", "u1")]
-        for colname in df.columns:
-            dtype_list.append((colname, "f4"))
-        vertices = np.array(vertices, dtype=dtype_list)
+    # Point cloud
+    if hasattr(pcd_object, 'colors'):
+        df[['x', 'y', 'z']] = pd.DataFrame(np.asarray(pcd_object.points)).astype('float32')
+        df[['red', 'green', 'blue']] = pd.DataFrame(np.asarray(pcd_object.colors)*255).astype('uint8')
+    # Mesh
     else:
-        # The dataframe contains the points, colors and scalar fields.
-        dtype_dict = {"x": "f4", "y": "f4", "z": "f4", "red": "u1", "green": "u1", "blue": "u1"}
-        for colname in df.columns:
-            if colname not in dtype_dict:
-                dtype_dict[colname] = "f4"
-        vertices = df.to_records(index=False, column_dtypes=dtype_dict)
-    ply = PlyData([PlyElement.describe(vertices, "vertex")], text=False)
+        df[['x', 'y', 'z']] = pd.DataFrame(np.asarray(pcd_object.vertices)).astype('float32')
+        df[['red', 'green', 'blue']] = pd.DataFrame(np.asarray(pcd_object.vertex_colors)*255).astype('uint8')
+
+    vertices = df.to_numpy()
+    dtype_dict = datetype_mapper(df)
+    vertices = df.to_records(index=False, column_dtypes=dtype_dict)
+
+    # Mesh
+    if hasattr(pcd_object, 'triangles') and len(pcd_object.triangles) > 0:
+        faces = np.asarray(pcd_object.triangles)
+        face_dtype = [("vertex_index", "i4", (3,))]
+        faces_np = np.array([(tuple(f),) for f in faces], dtype=face_dtype)
+        ply = PlyData([PlyElement.describe(vertices, "vertex"),
+                       PlyElement.describe(faces_np, 'face')], text=False)
+    else:
+        ply = PlyData([PlyElement.describe(vertices, "vertex")], text=False)
+
     ply.write(filename)
 
 
-def load_df_pointcloud(filename: str, return_pointcloud: bool = True,
+def load_df_pointcloud(filename: Path, return_pointcloud: bool = True,
                        df_drop: bool = True) -> tuple:
     """ Load pointcloud and scalarfields.
         Args:
@@ -119,3 +163,16 @@ def df_to_pointcloud(df: pd.DataFrame) -> o3d.geometry.PointCloud:
     pcd.points = o3d.utility.Vector3dVector(np.array(df[["x", "y", "z"]].values.tolist()))
     pcd.colors = o3d.utility.Vector3dVector(np.array(df[["red", "green", "blue"]].values.tolist()) / 255)
     return pcd
+
+
+if __name__ == "__main__":
+    for ply_file in Path("example_data").glob('*.ply.gz'):
+
+        # Load pointcloud
+        unzipped_ply = unzip_ply(ply_file)
+        df, pcd = load_df_pointcloud(unzipped_ply)
+
+        # Store pointcloud
+        output_file = Path('test_output.ply')
+        save_df_pointcloud(output_file, df, pcd)
+        zipped_path = zip_ply(output_file)
